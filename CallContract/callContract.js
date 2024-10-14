@@ -1,5 +1,7 @@
 require("dotenv").config();
 const { ethers } = require("ethers");
+const fs = require('fs');
+const path = require('path');
 
 // Load your Alchemy API URL and private key from environment variables
 const ALCHEMY_API_URL = process.env.ALCHEMY_API_URL;
@@ -8,79 +10,95 @@ const PRIVATE_KEY = process.env.PRIVATE_KEY;
 // Replace with your contract's ABI and address
 const contractData = require('./myFlash.json'); // Load the ABI
 const contractABI = Array.isArray(contractData) ? contractData : contractData.abi; // Ensure we access the right property
-const contractAddress = "0x443cBE4B2A49D8e061118470BBa9454B49B206b0"; // Replace with your actual contract address
-FlashParams = {
+const contractAddress = "0xe66E41BED03224DbdDC78dc4ed09b64094167f35"; // Replace with your actual contract address
+
+// Define the FlashParams object
+const FlashParams = {
     token: '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1',
     pairtoken: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
-    amount: ethers.utils.parseEther("1"), // starting value
+    amount: ethers.utils.parseEther("3"), // starting value
     usePath: 0,
     path1: 5,
     path2: 6
-  };
+};
 
+const FlashParams1 = {
+    token: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
+    pairtoken: '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1',
+    amount: ethers.utils.parseUnits("8000", 6), // starting value
+    usePath: 0,
+    path1: 5,
+    path2: 6
+};
 
+// Log file path
+const logFilePath = path.join(__dirname, 'transaction_logs.txt');
+
+// Helper function to log the message with timestamp in Japan Time Zone and run number
+let runNumber = 0;
+function logToFile(message) {
+    const timestamp = new Date().toLocaleString("ja-JP", { timeZone: "Asia/Tokyo", hour12: false });
+    const preciseTime = new Date().toISOString().split('T')[1]; // Get time with sub-seconds (HH:mm:ss.sss)
+    runNumber++;
+    const logMessage = `[Run ${runNumber}] ${timestamp} (${preciseTime}): ${message}\n`;
+    fs.appendFileSync(logFilePath, logMessage);
+}
+
+async function simulateFlashCall(contract, FlashParams) {
+    try {
+        // Simulate the flash call with callStatic to avoid gas usage
+        const result = await contract.callStatic.callFlash(FlashParams);
+        logToFile("Transaction simulation succeeded.");
+        
+        // If simulation succeeds, call the actual transaction
+        try {
+            const tx = await contract.callFlash(FlashParams);
+            logToFile(`Transaction sent: ${tx.hash}`);
+            
+            // Wait for transaction confirmation
+            const receipt = await tx.wait();
+            logToFile(`Transaction confirmed: ${receipt.transactionHash}`);
+        } catch (txError) {
+            logToFile(`Transaction failed: ${txError.message}`);
+        }
+        
+    } catch (error) {
+        // logToFile(`Transaction simulation failed or error: ${error.message}`);
+    }
+}
 
 async function main() {
     // Set up provider and wallet
-    const provider = new ethers.providers.JsonRpcProvider(ALCHEMY_API_URL);
+    const provider = new ethers.providers.WebSocketProvider(ALCHEMY_API_URL);
     const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
     const contract = new ethers.Contract(contractAddress, contractABI, wallet);
 
     console.log("Contract instance created");
+    logToFile("Contract instance created");
 
-    // Replace with your parameters
-    const tokenAddress = "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"; // Replace with the actual token address
-    const amount = ethers.utils.parseUnits("1.0", 18); // Adjust decimals as needed
-    const pairTokenAddress = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"; // Replace with the actual pair token address
-    FlashParams = {
-        token: '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1',
-        pairtoken: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
-        amount: ethers.utils.parseEther("1"), // starting value
-        usePath: 0,
-        path1: 5,
-        path2: 6
-      };
-    
+    // Define how many times to call in parallel
+    const numCalls = 100; // Total number of calls
+    const period = 1; // Period in milliseconds (0.01 seconds)
 
-    while (true) {        
-        //Call the function using callStatic to simulate and avoid gas usage
-        const result = await contract.callStatic.estimateProfit(tokenAddress, amount, pairTokenAddress);
-
-        // Convert BigNumbers to strings for easier reading
-        const mainResult = result[0].toString();
-        const nestedResult = result[1].map((bn) => bn.toString());
-
-        console.log("Simulated Result from estimateProfit:");
-        console.log("Main Result:", mainResult);
-        console.log("Nested Result:", nestedResult);
-
-        // Check if mainResult is greater than 1
-        if (ethers.BigNumber.from(mainResult).gt(ethers.BigNumber.from("1000000000000000000"))) {
-            console.log("Main result is greater than 1, calling callFlash...");
-            try {
-                // Call the contract's function (adjust FlashParams as needed)
-                const tx = await contract.callFlash(FlashParams, {
-                    gasLimit: gasLimit,
-                    maxPriorityFeePerGas: maxPriorityFeePerGas,
-                    maxFeePerGas: maxFeePerGas
-                });
-    
-                // Wait for the transaction to be mined
-                const receipt = await tx.wait();
-                console.log(`Transaction successful: ${receipt.transactionHash}`);
-            } catch (error) {
-                console.error("Transaction failed:", error);
-            }
+    // Infinite loop
+    while (true) {
+        const promises = [];
+        
+        // Create and push promises for the specified number of calls
+        for (let i = 0; i < numCalls; i++) {
+            promises.push(simulateFlashCall(contract, FlashParams));
+            // Wait for the specified period before the next call
+            await new Promise(resolve => setTimeout(resolve, period));
         }
 
-        // Optional: Add a delay between iterations to avoid overwhelming the network
-        await new Promise(resolve => setTimeout(resolve, 5)); // 5 second delay
+        // Wait for all promises to complete
+        await Promise.all(promises);
     }
 }
 
 main()
     .then(() => process.exit(0))
     .catch((error) => {
-        console.error(error);
+        logToFile(`Fatal error: ${error}`);
         process.exit(1);
     });

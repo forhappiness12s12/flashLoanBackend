@@ -37,7 +37,7 @@ function getCurrentTimeInJapan() {
 
 async function main() {
     // Set up provider and wallet
-    const provider = new ethers.providers.JsonRpcProvider(ALCHEMY_API_URL);
+    const provider = new ethers.providers.we(ALCHEMY_API_URL);
     const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
     const contract = new ethers.Contract(contractAddress, contractABI, wallet);
 
